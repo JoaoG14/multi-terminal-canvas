@@ -5,6 +5,8 @@ exports.deactivate = deactivate;
 const vscode = require("vscode");
 const pty = require("node-pty");
 const os = require("os");
+const fs = require("fs");
+const path = require("path");
 let panelInstance;
 const terminals = new Map();
 let idCounter = 0;
@@ -40,6 +42,10 @@ function activate(context) {
 }
 function handleMessage(message, webview) {
     switch (message.type) {
+        case 'ready': {
+            webview.postMessage({ type: 'shellsAvailable', shells: getAvailableShells() });
+            break;
+        }
         case 'createTerminal': {
             const id = String(++idCounter);
             const title = message.title || 'Terminal';
@@ -55,6 +61,10 @@ function handleMessage(message, webview) {
                     shell = '/bin/sh';
                     args = ['-c', 'claude'];
                 }
+            }
+            else if (message.shellPath) {
+                shell = message.shellPath;
+                args = getDefaultArgs(shell);
             }
             else {
                 if (os.platform() === 'win32') {
@@ -130,6 +140,71 @@ function handleMessage(message, webview) {
             break;
         }
     }
+}
+function getAvailableShells() {
+    const shells = [];
+    if (os.platform() === 'win32') {
+        // cmd.exe — always present
+        shells.push({ name: 'cmd', path: process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe' });
+        // Windows PowerShell 5
+        const ps5 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+        if (fs.existsSync(ps5))
+            shells.push({ name: 'PowerShell 5', path: ps5 });
+        // PowerShell 7+ (pwsh) — several common install locations
+        for (const p of [
+            'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+            'C:\\Program Files\\PowerShell\\7.4\\pwsh.exe',
+            'C:\\Program Files\\PowerShell\\7.3\\pwsh.exe',
+            path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'pwsh.exe'),
+        ]) {
+            if (fs.existsSync(p)) {
+                shells.push({ name: 'PowerShell 7', path: p });
+                break;
+            }
+        }
+        // Git Bash
+        for (const p of [
+            'C:\\Program Files\\Git\\bin\\bash.exe',
+            'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+            path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Git', 'bin', 'bash.exe'),
+        ]) {
+            if (fs.existsSync(p)) {
+                shells.push({ name: 'Git Bash', path: p });
+                break;
+            }
+        }
+        // WSL
+        const wsl = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wsl.exe');
+        if (fs.existsSync(wsl))
+            shells.push({ name: 'WSL', path: wsl });
+    }
+    else {
+        // Unix: parse /etc/shells, fall back to known paths
+        let candidates = [];
+        try {
+            candidates = fs.readFileSync('/etc/shells', 'utf8')
+                .split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+        }
+        catch {
+            candidates = ['/bin/bash', '/bin/zsh', '/bin/fish', '/bin/sh', '/usr/bin/bash',
+                '/usr/bin/zsh', '/usr/local/bin/fish'];
+        }
+        const seen = new Set();
+        for (const p of candidates) {
+            const name = path.basename(p);
+            if (!seen.has(name) && fs.existsSync(p)) {
+                seen.add(name);
+                shells.push({ name, path: p });
+            }
+        }
+    }
+    return shells;
+}
+function getDefaultArgs(shellPath) {
+    const name = path.basename(shellPath).toLowerCase();
+    if (name === 'powershell.exe' || name === 'pwsh.exe')
+        return ['-NoLogo'];
+    return [];
 }
 function getWebviewContent(webview, extensionUri) {
     const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'main.css'));

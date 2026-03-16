@@ -40,41 +40,116 @@ html, body {
 #toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
+  gap: 2px;
+  padding: 0 10px;
   height: var(--toolbar-h);
   background: var(--toolbar-bg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: none;
   flex-shrink: 0;
   z-index: 10000;
 }
 
-#zoom-indicator {
-  margin-left: auto;
-  color: var(--text-dim);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  min-width: 38px;
-  text-align: right;
-  cursor: default;
-  user-select: none;
-  padding-right: 4px;
-}
-
+/* ── Toolbar action buttons ── */
 #toolbar button {
   background: transparent;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  padding: 4px 12px;
+  color: rgba(255,255,255,0.55);
+  border: none;
+  padding: 5px 9px;
   cursor: pointer;
   font-family: inherit;
   font-size: 12px;
-  border-radius: var(--radius);
-  transition: background 0.1s;
+  border-radius: 6px;
+  letter-spacing: 0.01em;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
 }
 
 #toolbar button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255,255,255,0.07);
+  color: rgba(255,255,255,0.9);
+}
+
+#toolbar button:active {
+  background: rgba(255,255,255,0.04);
+}
+
+/* ── Zoom indicator ── */
+#zoom-indicator {
+  color: rgba(255,255,255,0.22);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: right;
+  cursor: default;
+  user-select: none;
+  letter-spacing: 0.02em;
+}
+
+/* ── Shell selector ── */
+.shell-select-wrap {
+  margin-left: auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.10);
+  transition: border-color 0.15s, background 0.15s;
+  margin-right: 6px;
+}
+
+.shell-select-wrap:hover {
+  border-color: rgba(255,255,255,0.22);
+  background: rgba(255,255,255,0.04);
+}
+
+/* Visible label + chevron (pointer-events: none — click passes to select) */
+.shell-select-display {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px 4px 10px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.shell-select-label {
+  font-size: 12px;
+  color: rgba(255,255,255,0.55);
+  letter-spacing: 0.01em;
+  transition: color 0.15s;
+  white-space: nowrap;
+}
+
+.shell-select-wrap:hover .shell-select-label {
+  color: rgba(255,255,255,0.85);
+}
+
+.shell-chevron {
+  color: rgba(255,255,255,0.3);
+  flex-shrink: 0;
+  transition: color 0.15s;
+  display: flex;
+  align-items: center;
+}
+
+.shell-select-wrap:hover .shell-chevron {
+  color: rgba(255,255,255,0.6);
+}
+
+/* The actual <select> sits over the display, fully transparent */
+#shell-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#shell-select option {
+  background: #1c1c1c;
+  color: rgba(255,255,255,0.85);
 }
 
 #canvas {
@@ -100,7 +175,7 @@ html, body {
 }
 
 #taskbar {
-  display: flex;
+  display: none;
   align-items: center;
   gap: 4px;
   padding: 0 8px;

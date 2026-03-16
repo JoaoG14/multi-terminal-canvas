@@ -168,18 +168,71 @@
     }
   }, { passive: false });
 
+  // ── Shell selector ────────────────────────────────────────────
+  let shellSelect = null;
+
+  function buildShellSelector(shells) {
+    if (!shells.length) return;
+    const existing = toolbar.querySelector('.shell-select-wrap');
+    if (existing) existing.remove();
+
+    const wrap = document.createElement('div');
+    wrap.className = 'shell-select-wrap';
+
+    // Visual layer (pointer-events: none in CSS)
+    const display = document.createElement('div');
+    display.className = 'shell-select-display';
+
+    const label = document.createElement('span');
+    label.className = 'shell-select-label';
+    label.textContent = shells[0]?.name ?? '';
+
+    const chevron = document.createElement('span');
+    chevron.className = 'shell-chevron';
+    chevron.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`;
+
+    display.append(label, chevron);
+
+    // Transparent interactive select on top
+    shellSelect = document.createElement('select');
+    shellSelect.id = 'shell-select';
+    shellSelect.title = 'Default shell';
+    for (const s of shells) {
+      const opt = document.createElement('option');
+      opt.value = s.path;
+      opt.textContent = s.name;
+      shellSelect.appendChild(opt);
+    }
+
+    // Keep visible label in sync
+    shellSelect.addEventListener('change', () => {
+      label.textContent = shellSelect.options[shellSelect.selectedIndex].text;
+    });
+
+    wrap.append(display, shellSelect);
+    toolbar.insertBefore(wrap, zoomLabel);
+  }
+
   // ── Toolbar buttons ───────────────────────────────────────────
   document.getElementById('btn-new-terminal').addEventListener('click', () => {
-    vscode.postMessage({ type: 'createTerminal', title: 'Terminal' });
+    vscode.postMessage({
+      type: 'createTerminal',
+      title: 'Terminal',
+      shellPath: shellSelect ? shellSelect.value : null
+    });
   });
   document.getElementById('btn-new-claude').addEventListener('click', () => {
     vscode.postMessage({ type: 'createTerminal', shell: 'claude', title: 'Claude' });
   });
 
+  // Ask extension host for available shells
+  vscode.postMessage({ type: 'ready' });
+
   // ── Messages from extension host ──────────────────────────────
   window.addEventListener('message', (event) => {
     const msg = event.data;
     switch (msg.type) {
+      case 'shellsAvailable': buildShellSelector(msg.shells); break;
       case 'terminalCreated': createWindow(msg.id, msg.title, msg.cwd || ''); break;
       case 'output': {
         const win = windows.get(msg.id);
@@ -474,14 +527,17 @@
 
   function updateTaskbar() {
     taskbar.innerHTML = '';
+    let hasMinimized = false;
     for (const [id, win] of windows) {
       if (!win.minimized) continue;
+      hasMinimized = true;
       const btn = document.createElement('button');
       btn.className = 'taskbar-btn';
       btn.textContent = btn.title = win.titleEl.textContent;
       btn.addEventListener('click', () => restoreWindow(id));
       taskbar.appendChild(btn);
     }
+    taskbar.style.display = hasMinimized ? 'flex' : 'none';
   }
 
   applyTransform();
