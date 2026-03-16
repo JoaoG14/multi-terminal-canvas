@@ -198,10 +198,15 @@
   function createWindow(id, title) {
     const W = 700, H = 450;
     const r = canvasRect();
-    // Centre in current viewport, cascade slightly per window
-    const off = (windows.size % 8) * 28;
-    const x = (r.width  / 2 - panX) / zoom - W / 2 + off;
-    const y = (r.height / 2 - panY) / zoom - H / 2 + off;
+    // Start at viewport centre, cascade until a free spot is found
+    const baseX = (r.width  / 2 - panX) / zoom - W / 2;
+    const baseY = (r.height / 2 - panY) / zoom - H / 2;
+    let x = baseX, y = baseY;
+    for (let i = 0; i < 20; i++) {
+      if (!collides(id, x, y, W, H)) break;
+      x = baseX + (i + 1) * 30;
+      y = baseY + (i + 1) * 30;
+    }
 
     const el = document.createElement('div');
     el.className = 'window';
@@ -261,27 +266,57 @@
     bringToFront(id);
   }
 
+  // ── Collision helpers ─────────────────────────────────────────
+  function getRect(el) {
+    return { x: parseFloat(el.style.left) || 0, y: parseFloat(el.style.top) || 0,
+             w: el.offsetWidth, h: el.offsetHeight };
+  }
+
+  function overlaps(ax, ay, aw, ah, bx, by, bw, bh) {
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+
+  // Returns true if a rect (x,y,w,h) in world-space collides with any other window
+  function collides(skipId, x, y, w, h) {
+    for (const [wid, win] of windows) {
+      if (wid === skipId || win.minimized || win.maximized) continue;
+      const r = getRect(win.windowEl);
+      if (overlaps(x, y, w, h, r.x, r.y, r.w, r.h)) return true;
+    }
+    return false;
+  }
+
   // ── Drag ──────────────────────────────────────────────────────
   function setupDrag(winEl, titlebar, id) {
-    let active = false, startX, startY, startL, startT;
+    let active = false, startX, startY, startL, startT, curL, curT;
 
     titlebar.addEventListener('mousedown', (e) => {
-      if (e.button !== 0 || spaceDown) return;  // space → pan instead
+      if (e.button !== 0 || spaceDown) return;
       const win = windows.get(id);
       if (!win || win.maximized) return;
       bringToFront(id);
       active = true;
       startX = e.clientX; startY = e.clientY;
-      startL = parseFloat(winEl.style.left) || 0;
-      startT = parseFloat(winEl.style.top)  || 0;
+      startL = curL = parseFloat(winEl.style.left) || 0;
+      startT = curT = parseFloat(winEl.style.top)  || 0;
       e.preventDefault();
     });
 
     document.addEventListener('mousemove', (e) => {
       if (!active) return;
-      // divide screen delta by zoom to get world-space delta
-      winEl.style.left = (startL + (e.clientX - startX) / zoom) + 'px';
-      winEl.style.top  = (startT + (e.clientY - startY) / zoom) + 'px';
+      const newX = startL + (e.clientX - startX) / zoom;
+      const newY = startT + (e.clientY - startY) / zoom;
+      const w = winEl.offsetWidth, h = winEl.offsetHeight;
+
+      if (!collides(id, newX, newY, w, h)) {
+        curL = newX; curT = newY;
+      } else if (!collides(id, newX, curT, w, h)) {
+        curL = newX;          // slide horizontally only
+      } else if (!collides(id, curL, newY, w, h)) {
+        curT = newY;          // slide vertically only
+      }
+      winEl.style.left = curL + 'px';
+      winEl.style.top  = curT + 'px';
     });
 
     document.addEventListener('mouseup', () => { active = false; });
@@ -315,7 +350,10 @@
         if (dir.includes('s')) nh = Math.max(minH, sh + dy);
         if (dir.includes('w')) { nw = Math.max(minW, sw - dx); nl = sl + (sw - nw); }
         if (dir.includes('n')) { nh = Math.max(minH, sh - dy); nt = st + (sh - nh); }
-        Object.assign(winEl.style, { left: nl+'px', top: nt+'px', width: nw+'px', height: nh+'px' });
+        // Only apply if it won't overlap another window
+        if (!collides(id, nl, nt, nw, nh)) {
+          Object.assign(winEl.style, { left: nl+'px', top: nt+'px', width: nw+'px', height: nh+'px' });
+        }
       });
 
       document.addEventListener('mouseup', () => {
