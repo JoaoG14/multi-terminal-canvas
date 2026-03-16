@@ -3,12 +3,12 @@
   --toolbar-bg: #111111;
   --taskbar-bg: #111111;
   --border: #2a2a2a;
-  --border-act: #4a9eff;
-  --accent: #4a9eff;
+  --border-act: #ffffff;
+  --accent: #ffffff;
   --text: #cccccc;
   --text-dim: #666666;
-  --radius: 0px;
-  --titlebar-h: 32px;
+  --radius: 12px;
+  --titlebar-h: 28px;
   --taskbar-h: 36px;
   --toolbar-h: 40px;
   --resize-w: 6px;
@@ -74,7 +74,7 @@ html, body {
 }
 
 #toolbar button:hover {
-  background: rgba(74, 158, 255, 0.1);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 #canvas {
@@ -138,72 +138,75 @@ html, body {
   position: absolute;
   display: flex;
   flex-direction: column;
-  background: #141414;
-  border: 1px solid var(--border);
+  background: #0a0a0a;
+  border: 1px solid rgba(255,255,255,0.10);
   border-radius: var(--radius);
   min-width: 200px;
-  min-height: 100px;
+  min-height: 120px;
   will-change: transform;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .window.window-active {
-  border-color: var(--border-act);
+  border-color: rgba(255,255,255,0.28);
 }
 
+/* Top bar: path left, × right */
 .window-titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--titlebar-h);
   display: flex;
   align-items: center;
-  height: var(--titlebar-h);
-  background: #1a1a1a;
-  padding: 0 8px;
+  padding: 0 6px 0 10px;
   cursor: move;
   user-select: none;
-  flex-shrink: 0;
-  gap: 6px;
+  z-index: 10;
+  background: transparent;
 }
 
-.window.window-active .window-titlebar {
-  background: #1e2a3a;
-}
-
-.window-title {
+.window-path {
   flex: 1;
-  font-size: 12px;
-  color: var(--text);
+  font-size: 11px;
+  color: rgba(255,255,255,0.38);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  pointer-events: none;
 }
 
-.window-controls {
-  display: flex;
-  gap: 4px;
-}
-
-.wc-btn {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: none;
-  cursor: pointer;
-  font-size: 0;
+/* Close button */
+.wc-close {
   flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,0.38);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 5px;
+  transition: color 0.15s, background 0.15s;
 }
 
-.wc-minimize { background: #f5a623; }
-.wc-maximize { background: #7ed321; }
-.wc-close    { background: #d0021b; }
-
-.wc-btn:hover {
-  filter: brightness(1.3);
+.wc-close:hover {
+  color: rgba(255,255,255,0.9);
+  background: rgba(255,255,255,0.09);
 }
 
 .terminal-body {
   flex: 1;
   overflow: hidden;
   position: relative;
-  padding: 2px;
+  padding: 0;
+  /* push content below the invisible drag strip */
+  margin-top: var(--titlebar-h);
 }
 
 .terminal-body .xterm {

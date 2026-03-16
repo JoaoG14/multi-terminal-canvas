@@ -180,10 +180,15 @@
   window.addEventListener('message', (event) => {
     const msg = event.data;
     switch (msg.type) {
-      case 'terminalCreated': createWindow(msg.id, msg.title); break;
+      case 'terminalCreated': createWindow(msg.id, msg.title, msg.cwd || ''); break;
       case 'output': {
         const win = windows.get(msg.id);
         if (win) win.terminal.write(msg.data);
+        break;
+      }
+      case 'cwdChanged': {
+        const win = windows.get(msg.id);
+        if (win?.pathEl) win.pathEl.textContent = shortenPath(msg.cwd);
         break;
       }
       case 'terminalExited': {
@@ -194,11 +199,19 @@
     }
   });
 
+  // Shorten a path to last 2 segments, prefixed with …
+  function shortenPath(p) {
+    if (!p) return '';
+    const sep = p.includes('\\') ? '\\' : '/';
+    const parts = p.split(sep).filter(Boolean);
+    if (parts.length <= 2) return p;
+    return '…' + sep + parts.slice(-2).join(sep);
+  }
+
   // ── Window creation ───────────────────────────────────────────
-  function createWindow(id, title) {
-    const W = 700, H = 450;
+  function createWindow(id, title, cwd) {
+    const W = 420, H = 580;   // portrait
     const r = canvasRect();
-    // Start at viewport centre, cascade until a free spot is found
     const baseX = (r.width  / 2 - panX) / zoom - W / 2;
     const baseY = (r.height / 2 - panY) / zoom - H / 2;
     let x = baseX, y = baseY;
@@ -213,32 +226,28 @@
     Object.assign(el.style, { left: x+'px', top: y+'px', width: W+'px', height: H+'px' });
     el.dataset.id = id;
 
-    // Titlebar
+    // Top bar: path on left, × on right
     const titlebar = document.createElement('div');
     titlebar.className = 'window-titlebar';
 
-    const titleEl = document.createElement('span');
-    titleEl.className = 'window-title';
-    titleEl.textContent = title;
-    titleEl.addEventListener('dblclick', () => {
-      const n = prompt('Rename:', titleEl.textContent);
-      if (n?.trim()) { titleEl.textContent = n.trim(); updateTaskbar(); }
-    });
+    const pathEl = document.createElement('span');
+    pathEl.className = 'window-path';
+    pathEl.textContent = shortenPath(cwd);
 
-    const controls = document.createElement('div');
-    controls.className = 'window-controls';
-    const mkBtn = (cls, label, fn) => {
-      const b = document.createElement('button');
-      b.className = 'wc-btn ' + cls; b.title = label;
-      b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
-      return b;
-    };
-    controls.append(
-      mkBtn('wc-minimize', 'Minimize', () => minimizeWindow(id)),
-      mkBtn('wc-maximize', 'Maximize', () => maximizeWindow(id)),
-      mkBtn('wc-close',    'Close',    () => closeWindow(id))
-    );
-    titlebar.append(titleEl, controls);
+    const btnClose = document.createElement('button');
+    btnClose.className = 'wc-close';
+    btnClose.title = 'Close';
+    btnClose.textContent = '×';
+    btnClose.addEventListener('click', (e) => { e.stopPropagation(); closeWindow(id); });
+
+    titlebar.append(pathEl, btnClose);
+
+    // titleEl kept for taskbar label (not visible in window)
+    const titleEl = document.createElement('span');
+    titleEl.style.display = 'none';
+    titleEl.textContent = title;
+
+    el.append(titlebar, titleEl);
 
     const body = document.createElement('div');
     body.className = 'terminal-body';
@@ -253,10 +262,10 @@
       el.appendChild(h);
     }
 
-    el.append(titlebar, body);
-    world.appendChild(el);   // lives inside the world transform
+    el.append(body);
+    world.appendChild(el);
 
-    windows.set(id, { terminal: null, fitAddon: null, windowEl: el, titleEl,
+    windows.set(id, { terminal: null, fitAddon: null, windowEl: el, titleEl, pathEl,
                       minimized: false, maximized: false, savedGeom: null,
                       resizeObserver: null });
 
@@ -372,7 +381,7 @@
   function setupTerminal(id, container) {
     const term = new Terminal({
       theme: { background: '#141414', foreground: '#cccccc',
-               cursor: '#4a9eff', selectionBackground: 'rgba(74,158,255,0.3)' },
+               cursor: '#ffffff', selectionBackground: 'rgba(255,255,255,0.2)' },
       fontFamily: "'Cascadia Code','Consolas',monospace",
       fontSize: 13, lineHeight: 1.2, cursorBlink: true, allowProposedApi: true
     });

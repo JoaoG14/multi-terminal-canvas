@@ -78,18 +78,30 @@ function handleMessage(message: any, webview: vscode.Webview) {
         }
       }
 
+      const initialCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+        || process.env.HOME || process.env.USERPROFILE || '/';
+
       try {
         const ptyProcess = pty.spawn(shell, args, {
           name: 'xterm-256color',
           cols: 80,
           rows: 24,
-          cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-            || process.env.HOME || process.env.USERPROFILE || '/',
+          cwd: initialCwd,
           env: process.env as { [key: string]: string },
           useConpty: false
         });
+
+        // OSC 7 reports cwd changes: ESC ] 7 ; file://host/path BEL|ST
+        const osc7Re = /\x1b\]7;file:\/\/[^/]*(\/[^\x07\x1b]*)/;
         ptyProcess.onData((data: string) => {
           webview.postMessage({ type: 'output', id, data });
+          const m = data.match(osc7Re);
+          if (m) {
+            let cwd = decodeURIComponent(m[1]);
+            // Windows: /C:/path → C:\path
+            cwd = cwd.replace(/^\/([A-Za-z]):/, '$1:').replace(/\//g, '\\');
+            webview.postMessage({ type: 'cwdChanged', id, cwd });
+          }
         });
 
         ptyProcess.onExit(({ exitCode }) => {
@@ -98,7 +110,7 @@ function handleMessage(message: any, webview: vscode.Webview) {
         });
 
         terminals.set(id, ptyProcess);
-        webview.postMessage({ type: 'terminalCreated', id, title });
+        webview.postMessage({ type: 'terminalCreated', id, title, cwd: initialCwd });
       } catch (err: any) {
         vscode.window.showErrorMessage(`Canvas Terminals: failed to spawn shell — ${err.message}`);
       }
