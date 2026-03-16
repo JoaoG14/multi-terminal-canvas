@@ -433,8 +433,14 @@
   // ── Terminal ──────────────────────────────────────────────────
   function setupTerminal(id, container) {
     const term = new Terminal({
-      theme: { background: '#141414', foreground: '#cccccc',
-               cursor: '#ffffff', selectionBackground: 'rgba(255,255,255,0.2)' },
+      theme: {
+        background:          '#0a0a0a',
+        foreground:          '#cccccc',
+        cursor:              '#ffffff',
+        selectionBackground: 'rgba(255,255,255,0.15)',
+        yellow:              '#DA785B',
+        brightYellow:        '#DA785B',
+      },
       fontFamily: "'Cascadia Code','Consolas',monospace",
       fontSize: 13, lineHeight: 1.2, cursorBlink: true, allowProposedApi: true
     });
