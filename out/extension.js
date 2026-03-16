@@ -71,7 +71,8 @@ function handleMessage(message, webview) {
                     name: 'xterm-256color',
                     cols: 80,
                     rows: 24,
-                    cwd: process.env.HOME || process.env.USERPROFILE || '/',
+                    cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+                        || process.env.HOME || process.env.USERPROFILE || '/',
                     env: process.env,
                     useConpty: false
                 });

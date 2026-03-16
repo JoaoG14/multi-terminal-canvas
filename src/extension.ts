@@ -83,7 +83,8 @@ function handleMessage(message: any, webview: vscode.Webview) {
           name: 'xterm-256color',
           cols: 80,
           rows: 24,
-          cwd: process.env.HOME || process.env.USERPROFILE || '/',
+          cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+            || process.env.HOME || process.env.USERPROFILE || '/',
           env: process.env as { [key: string]: string },
           useConpty: false
         });
