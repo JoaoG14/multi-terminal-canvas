@@ -218,7 +218,6 @@ html, body {
   border-radius: var(--radius);
   min-width: 200px;
   min-height: 120px;
-  will-change: transform;
   overflow: hidden;
 }
 
@@ -311,3 +310,64 @@ html, body {
 .resize-ne { top: calc(-1 * var(--resize-w) / 2); right: calc(-1 * var(--resize-w) / 2); width: calc(var(--resize-w) * 2); height: calc(var(--resize-w) * 2); cursor: ne-resize; }
 .resize-sw { bottom: calc(-1 * var(--resize-w) / 2); left: calc(-1 * var(--resize-w) / 2); width: calc(var(--resize-w) * 2); height: calc(var(--resize-w) * 2); cursor: sw-resize; }
 .resize-se { bottom: calc(-1 * var(--resize-w) / 2); right: calc(-1 * var(--resize-w) / 2); width: calc(var(--resize-w) * 2); height: calc(var(--resize-w) * 2); cursor: se-resize; }
+
+/* ── Context Menu ── */
+#ctx-menu {
+  display: none;
+  position: fixed;
+  z-index: 99999;
+  background: #1a1a1a;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 190px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.65);
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12px;
+  user-select: none;
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,0.75);
+  padding: 5px 10px;
+  cursor: pointer;
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  gap: 16px;
+  transition: background 0.1s, color 0.1s;
+}
+
+.ctx-item:hover:not(:disabled) {
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.95);
+}
+
+.ctx-item:disabled {
+  color: rgba(255,255,255,0.22);
+  cursor: default;
+}
+
+.ctx-item.ctx-danger:hover:not(:disabled) {
+  background: rgba(220,50,50,0.14);
+  color: rgba(255,110,110,0.95);
+}
+
+.ctx-hint {
+  color: rgba(255,255,255,0.22);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.ctx-sep {
+  height: 1px;
+  background: rgba(255,255,255,0.07);
+  margin: 3px 6px;
+}

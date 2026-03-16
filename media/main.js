@@ -6,6 +6,47 @@
   const taskbar  = document.getElementById('taskbar');
   const toolbar  = document.getElementById('toolbar');
 
+  // ── Context menu ──────────────────────────────────────────────
+  const ctxMenu = document.createElement('div');
+  ctxMenu.id = 'ctx-menu';
+  document.body.appendChild(ctxMenu);
+
+  function showContextMenu(x, y, items) {
+    ctxMenu.innerHTML = '';
+    for (const item of items) {
+      if (item === '-') {
+        const sep = document.createElement('div');
+        sep.className = 'ctx-sep';
+        ctxMenu.appendChild(sep);
+        continue;
+      }
+      const btn = document.createElement('button');
+      btn.className = 'ctx-item' + (item.danger ? ' ctx-danger' : '');
+      if (item.disabled) btn.disabled = true;
+      const lbl = document.createElement('span');
+      lbl.textContent = item.label;
+      btn.appendChild(lbl);
+      if (item.hint) {
+        const hint = document.createElement('span');
+        hint.className = 'ctx-hint';
+        hint.textContent = item.hint;
+        btn.appendChild(hint);
+      }
+      btn.addEventListener('click', () => { hideContextMenu(); item.action(); });
+      ctxMenu.appendChild(btn);
+    }
+    ctxMenu.style.display = 'block';
+    const menuW = ctxMenu.offsetWidth;
+    const menuH = ctxMenu.offsetHeight;
+    ctxMenu.style.left = Math.max(4, Math.min(x, window.innerWidth  - menuW - 4)) + 'px';
+    ctxMenu.style.top  = Math.max(4, Math.min(y, window.innerHeight - menuH - 4)) + 'px';
+  }
+
+  function hideContextMenu() { ctxMenu.style.display = 'none'; }
+
+  document.addEventListener('mousedown', (e) => { if (!ctxMenu.contains(e.target)) hideContextMenu(); });
+  document.addEventListener('keydown',   (e) => { if (e.key === 'Escape') hideContextMenu(); }, true);
+
   // ── World container (all windows live here) ───────────────────
   const world = document.createElement('div');
   world.id = 'world';
@@ -14,20 +55,47 @@
   // ── Viewport state ────────────────────────────────────────────
   let panX = 0, panY = 0, zoom = 1;
   const MIN_ZOOM = 0.05, MAX_ZOOM = 5;
+  const BASE_FONT_SIZE = 13;
 
-  // Zoom indicator
+  // ── Zoom settle: update font sizes + refit after zoom stops ───
+  // We scale font proportionally with zoom so cols/rows stay roughly
+  // constant and — crucially — the world transform never includes
+  // scale(), so xterm canvases render at native DPR with no GPU blur.
+  let zoomInProgress = false;
+  let zoomSettleTimer = null;
+
+  function scheduleZoomSettle() {
+    zoomInProgress = true;
+    clearTimeout(zoomSettleTimer);
+    zoomSettleTimer = setTimeout(() => {
+      zoomInProgress = false;
+      const newFontSize = Math.max(6, Math.round(BASE_FONT_SIZE * zoom));
+      for (const [id, win] of windows) {
+        if (!win.terminal || !win.fitAddon) continue;
+        win.terminal.options.fontSize = newFontSize;
+        win.fitAddon.fit();
+        sendResize(id, win.terminal);
+      }
+    }, 150);
+  }
+
+  // ── Zoom indicator ────────────────────────────────────────────
   const zoomLabel = document.createElement('span');
   zoomLabel.id = 'zoom-indicator';
   zoomLabel.textContent = '100%';
   toolbar.appendChild(zoomLabel);
 
+  // World transform: translate only — NO scale.
+  // Windows are positioned at (wx*zoom, wy*zoom) in CSS, which together
+  // with the pan translate puts them at the right screen position.
+  // Removing scale means the browser never GPU-upscales the canvas layers.
   function applyTransform() {
-    world.style.transform = `translate(${panX}px,${panY}px) scale(${zoom})`;
+    world.style.transform = `translate(${panX}px,${panY}px)`;
     zoomLabel.textContent = Math.round(zoom * 100) + '%';
-    // Scroll the grid background so it feels infinite
     const g = 32 * zoom;
     canvasEl.style.backgroundSize = `${g}px ${g}px`;
     canvasEl.style.backgroundPosition = `${panX % g}px ${panY % g}px`;
+    positionAllWindows();
   }
 
   function canvasRect() { return canvasEl.getBoundingClientRect(); }
@@ -42,21 +110,38 @@
     zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
     panX = px - wx * zoom;
     panY = py - wy * zoom;
+    scheduleZoomSettle();
     applyTransform();
   }
 
   // ── Window state ──────────────────────────────────────────────
+  // Each window stores world-space coords (wx,wy,ww,wh). CSS position
+  // is derived as wx*zoom etc., so windows appear at the right size on
+  // screen without any CSS transform scale on the parent.
   const windows = new Map();
   let zCounter = 100;
+
+  function positionWindow(id) {
+    const win = windows.get(id);
+    if (!win || win.minimized || win.maximized) return;
+    const el = win.windowEl;
+    el.style.left   = win.wx * zoom + 'px';
+    el.style.top    = win.wy * zoom + 'px';
+    el.style.width  = win.ww * zoom + 'px';
+    el.style.height = win.wh * zoom + 'px';
+  }
+
+  function positionAllWindows() {
+    for (const [id] of windows) positionWindow(id);
+  }
 
   // ── Pan state ─────────────────────────────────────────────────
   let isPanning  = false;
   let spaceDown  = false;
-  let panStart   = null; // { x, y, px, py }
+  let panStart   = null;
 
   // ── Keyboard shortcuts ────────────────────────────────────────
   document.addEventListener('keydown', (e) => {
-    // Ignore when typing inside a focused xterm instance
     const tag = document.activeElement?.tagName;
 
     if (e.code === 'Space' && !e.ctrlKey && !e.metaKey && tag !== 'INPUT' && tag !== 'TEXTAREA') {
@@ -75,11 +160,9 @@
           zoomTo(zoom / 1.25, ...viewportCenter());
           e.preventDefault(); break;
         case '0':
-          // Reset to 100 % centred on viewport
           zoomTo(1, ...viewportCenter());
           e.preventDefault(); break;
         case '9':
-          // Zoom to fit all windows
           fitAll();
           e.preventDefault(); break;
       }
@@ -107,13 +190,9 @@
     if (windows.size === 0) { panX = 0; panY = 0; zoom = 1; applyTransform(); return; }
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const [, win] of windows) {
-      const el = win.windowEl;
-      const x = parseFloat(el.style.left) || 0;
-      const y = parseFloat(el.style.top)  || 0;
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
-      minX = Math.min(minX, x);       minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x + w);   maxY = Math.max(maxY, y + h);
+      if (win.minimized) continue;
+      minX = Math.min(minX, win.wx);           minY = Math.min(minY, win.wy);
+      maxX = Math.max(maxX, win.wx + win.ww);  maxY = Math.max(maxY, win.wy + win.wh);
     }
     const pad = 60;
     const r   = canvasRect();
@@ -122,6 +201,7 @@
     zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(scaleX, scaleY)));
     panX = -minX * zoom + pad * zoom + (r.width  - (maxX - minX) * zoom) / 2;
     panY = -minY * zoom + pad * zoom + (r.height - (maxY - minY) * zoom) / 2;
+    scheduleZoomSettle();
     applyTransform();
   }
 
@@ -168,6 +248,23 @@
     }
   }, { passive: false });
 
+  // ── Canvas right-click ────────────────────────────────────────
+  canvasEl.addEventListener('contextmenu', (e) => {
+    if (e.target.closest?.('.window')) return;
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, [
+      { label: 'New Terminal',        hint: 'Ctrl+Shift+T', action: () => vscode.postMessage({ type: 'createTerminal', title: 'Terminal', shellPath: shellSelect ? shellSelect.value : null }) },
+      { label: 'New Claude Terminal',                       action: () => vscode.postMessage({ type: 'createTerminal', shell: 'claude', title: 'Claude' }) },
+      '-',
+      { label: 'Zoom to Fit All',     hint: 'Ctrl+9',  action: () => fitAll() },
+      { label: 'Reset Zoom (100%)',   hint: 'Ctrl+0',  action: () => zoomTo(1, ...viewportCenter()) },
+      { label: 'Zoom In',             hint: 'Ctrl++',  action: () => zoomTo(zoom * 1.25, ...viewportCenter()) },
+      { label: 'Zoom Out',            hint: 'Ctrl+-',  action: () => zoomTo(zoom / 1.25, ...viewportCenter()) },
+      '-',
+      { label: 'Close All', danger: true, disabled: windows.size === 0, action: () => { for (const id of [...windows.keys()]) closeWindow(id); } },
+    ]);
+  });
+
   // ── Shell selector ────────────────────────────────────────────
   let shellSelect = null;
 
@@ -179,7 +276,6 @@
     const wrap = document.createElement('div');
     wrap.className = 'shell-select-wrap';
 
-    // Visual layer (pointer-events: none in CSS)
     const display = document.createElement('div');
     display.className = 'shell-select-display';
 
@@ -193,7 +289,6 @@
 
     display.append(label, chevron);
 
-    // Transparent interactive select on top
     shellSelect = document.createElement('select');
     shellSelect.id = 'shell-select';
     shellSelect.title = 'Default shell';
@@ -204,7 +299,6 @@
       shellSelect.appendChild(opt);
     }
 
-    // Keep visible label in sync
     shellSelect.addEventListener('change', () => {
       label.textContent = shellSelect.options[shellSelect.selectedIndex].text;
     });
@@ -225,7 +319,6 @@
     vscode.postMessage({ type: 'createTerminal', shell: 'claude', title: 'Claude' });
   });
 
-  // Ask extension host for available shells
   vscode.postMessage({ type: 'ready' });
 
   // ── Messages from extension host ──────────────────────────────
@@ -252,7 +345,6 @@
     }
   });
 
-  // Shorten a path to last 2 segments, prefixed with …
   function shortenPath(p) {
     if (!p) return '';
     const sep = p.includes('\\') ? '\\' : '/';
@@ -263,7 +355,7 @@
 
   // ── Window creation ───────────────────────────────────────────
   function createWindow(id, title, cwd) {
-    const W = 420, H = 580;   // portrait
+    const W = 420, H = 580;
     const r = canvasRect();
     const baseX = (r.width  / 2 - panX) / zoom - W / 2;
     const baseY = (r.height / 2 - panY) / zoom - H / 2;
@@ -276,10 +368,8 @@
 
     const el = document.createElement('div');
     el.className = 'window';
-    Object.assign(el.style, { left: x+'px', top: y+'px', width: W+'px', height: H+'px' });
     el.dataset.id = id;
 
-    // Top bar: path on left, × on right
     const titlebar = document.createElement('div');
     titlebar.className = 'window-titlebar';
 
@@ -295,7 +385,6 @@
 
     titlebar.append(pathEl, btnClose);
 
-    // titleEl kept for taskbar label (not visible in window)
     const titleEl = document.createElement('span');
     titleEl.style.display = 'none';
     titleEl.textContent = title;
@@ -305,7 +394,6 @@
     const body = document.createElement('div');
     body.className = 'terminal-body';
 
-    // Resize handles
     const handles = [];
     for (const dir of ['n','s','e','w','nw','ne','sw','se']) {
       const h = document.createElement('div');
@@ -320,10 +408,37 @@
 
     windows.set(id, { terminal: null, fitAddon: null, windowEl: el, titleEl, pathEl,
                       minimized: false, maximized: false, savedGeom: null,
-                      resizeObserver: null });
+                      resizeObserver: null, terminalBody: null,
+                      wx: x, wy: y, ww: W, wh: H });
+    positionWindow(id);
 
-    // Bring to front on any click, capture phase so xterm doesn't swallow it
     el.addEventListener('mousedown', () => bringToFront(id), true);
+
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      bringToFront(id);
+      const win = windows.get(id);
+      const inTerminal = !!e.target.closest?.('.terminal-body');
+      const items = [];
+      if (inTerminal) {
+        items.push(
+          { label: 'Copy',  action: () => { const s = win?.terminal?.getSelection(); if (s) navigator.clipboard.writeText(s); } },
+          { label: 'Paste', action: () => navigator.clipboard.readText().then(t => { if (t) vscode.postMessage({ type: 'input', id, data: t }); }) },
+          { label: 'Clear', action: () => win?.terminal?.clear() },
+          '-',
+        );
+      }
+      items.push(
+        { label: win?.maximized ? 'Restore' : 'Maximize', action: () => maximizeWindow(id) },
+        { label: 'Minimize',                               action: () => minimizeWindow(id) },
+        '-',
+        { label: 'Zoom to Window',                         action: () => zoomToWindow(id) },
+        '-',
+        { label: 'Close', danger: true,                    action: () => closeWindow(id) },
+      );
+      showContextMenu(e.clientX, e.clientY, items);
+    }, true);
 
     setupDrag(el, titlebar, id);
     setupResize(el, handles, id);
@@ -332,28 +447,22 @@
   }
 
   // ── Collision helpers ─────────────────────────────────────────
-  function getRect(el) {
-    return { x: parseFloat(el.style.left) || 0, y: parseFloat(el.style.top) || 0,
-             w: el.offsetWidth, h: el.offsetHeight };
-  }
-
   function overlaps(ax, ay, aw, ah, bx, by, bw, bh) {
     return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
   }
 
-  // Returns true if a rect (x,y,w,h) in world-space collides with any other window
+  // All coordinates are in world units (independent of zoom).
   function collides(skipId, x, y, w, h) {
     for (const [wid, win] of windows) {
       if (wid === skipId || win.minimized || win.maximized) continue;
-      const r = getRect(win.windowEl);
-      if (overlaps(x, y, w, h, r.x, r.y, r.w, r.h)) return true;
+      if (overlaps(x, y, w, h, win.wx, win.wy, win.ww, win.wh)) return true;
     }
     return false;
   }
 
   // ── Drag ──────────────────────────────────────────────────────
   function setupDrag(winEl, titlebar, id) {
-    let active = false, startX, startY, startL, startT, curL, curT;
+    let active = false, startX, startY, startWX, startWY, curWX, curWY;
 
     titlebar.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || spaceDown) return;
@@ -362,26 +471,29 @@
       bringToFront(id);
       active = true;
       startX = e.clientX; startY = e.clientY;
-      startL = curL = parseFloat(winEl.style.left) || 0;
-      startT = curT = parseFloat(winEl.style.top)  || 0;
+      startWX = curWX = win.wx;
+      startWY = curWY = win.wy;
       e.preventDefault();
     });
 
     document.addEventListener('mousemove', (e) => {
       if (!active) return;
-      const newX = startL + (e.clientX - startX) / zoom;
-      const newY = startT + (e.clientY - startY) / zoom;
-      const w = winEl.offsetWidth, h = winEl.offsetHeight;
+      const win = windows.get(id);
+      if (!win) return;
+      // Screen delta / zoom = world delta (world has no CSS scale, so screen px = CSS px)
+      const newWX = startWX + (e.clientX - startX) / zoom;
+      const newWY = startWY + (e.clientY - startY) / zoom;
 
-      if (!collides(id, newX, newY, w, h)) {
-        curL = newX; curT = newY;
-      } else if (!collides(id, newX, curT, w, h)) {
-        curL = newX;          // slide horizontally only
-      } else if (!collides(id, curL, newY, w, h)) {
-        curT = newY;          // slide vertically only
+      if (!collides(id, newWX, newWY, win.ww, win.wh)) {
+        curWX = newWX; curWY = newWY;
+      } else if (!collides(id, newWX, curWY, win.ww, win.wh)) {
+        curWX = newWX;
+      } else if (!collides(id, curWX, newWY, win.ww, win.wh)) {
+        curWY = newWY;
       }
-      winEl.style.left = curL + 'px';
-      winEl.style.top  = curT + 'px';
+      win.wx = curWX; win.wy = curWY;
+      winEl.style.left = curWX * zoom + 'px';
+      winEl.style.top  = curWY * zoom + 'px';
     });
 
     document.addEventListener('mouseup', () => { active = false; });
@@ -390,7 +502,7 @@
   // ── Resize ────────────────────────────────────────────────────
   function setupResize(winEl, handles, id) {
     for (const handle of handles) {
-      let active = false, dir, sx, sy, sl, st, sw, sh;
+      let active = false, dir, sx, sy, startWX, startWY, startWW, startWH;
 
       handle.addEventListener('mousedown', (e) => {
         if (e.button !== 0 || spaceDown) return;
@@ -399,25 +511,29 @@
         bringToFront(id);
         active = true; dir = handle.dataset.dir;
         sx = e.clientX; sy = e.clientY;
-        sl = parseFloat(winEl.style.left) || 0;
-        st = parseFloat(winEl.style.top)  || 0;
-        sw = winEl.offsetWidth; sh = winEl.offsetHeight;
+        startWX = win.wx; startWY = win.wy;
+        startWW = win.ww; startWH = win.wh;
         e.preventDefault(); e.stopPropagation();
       });
 
       document.addEventListener('mousemove', (e) => {
         if (!active) return;
+        const win = windows.get(id);
+        if (!win) return;
         const dx = (e.clientX - sx) / zoom;
         const dy = (e.clientY - sy) / zoom;
         const minW = 200, minH = 100;
-        let nl = sl, nt = st, nw = sw, nh = sh;
-        if (dir.includes('e')) nw = Math.max(minW, sw + dx);
-        if (dir.includes('s')) nh = Math.max(minH, sh + dy);
-        if (dir.includes('w')) { nw = Math.max(minW, sw - dx); nl = sl + (sw - nw); }
-        if (dir.includes('n')) { nh = Math.max(minH, sh - dy); nt = st + (sh - nh); }
-        // Only apply if it won't overlap another window
-        if (!collides(id, nl, nt, nw, nh)) {
-          Object.assign(winEl.style, { left: nl+'px', top: nt+'px', width: nw+'px', height: nh+'px' });
+        let nwx = startWX, nwy = startWY, nww = startWW, nwh = startWH;
+        if (dir.includes('e')) nww = Math.max(minW, startWW + dx);
+        if (dir.includes('s')) nwh = Math.max(minH, startWH + dy);
+        if (dir.includes('w')) { nww = Math.max(minW, startWW - dx); nwx = startWX + (startWW - nww); }
+        if (dir.includes('n')) { nwh = Math.max(minH, startWH - dy); nwy = startWY + (startWH - nwh); }
+        if (!collides(id, nwx, nwy, nww, nwh)) {
+          win.wx = nwx; win.wy = nwy; win.ww = nww; win.wh = nwh;
+          Object.assign(winEl.style, {
+            left:   win.wx * zoom + 'px', top:    win.wy * zoom + 'px',
+            width:  win.ww * zoom + 'px', height: win.wh * zoom + 'px'
+          });
         }
       });
 
@@ -445,7 +561,8 @@
         brightYellow:        '#DA785B',
       },
       fontFamily: "'Cascadia Code','Consolas',monospace",
-      fontSize: 13, lineHeight: 1.2, cursorBlink: true, allowProposedApi: true
+      fontSize: Math.max(6, Math.round(BASE_FONT_SIZE * zoom)),
+      lineHeight: 1.2, cursorBlink: true, allowProposedApi: true
     });
     const fitAddon  = new FitAddon.FitAddon();
     const linkAddon = new WebLinksAddon.WebLinksAddon();
@@ -457,13 +574,19 @@
     term.onData((data) => vscode.postMessage({ type: 'input', id, data }));
     term.focus();
 
-    const ro = new ResizeObserver(() => requestAnimationFrame(() => {
-      fitAddon.fit(); sendResize(id, term);
-    }));
+    const ro = new ResizeObserver(() => {
+      if (zoomInProgress) return; // zoom-settle callback handles refit
+      requestAnimationFrame(() => { fitAddon.fit(); sendResize(id, term); });
+    });
     ro.observe(container);
 
     const win = windows.get(id);
-    if (win) { win.terminal = term; win.fitAddon = fitAddon; win.resizeObserver = ro; }
+    if (win) {
+      win.terminal = term;
+      win.fitAddon = fitAddon;
+      win.resizeObserver = ro;
+      win.terminalBody = container;
+    }
   }
 
   function sendResize(id, term) {
@@ -493,19 +616,20 @@
     if (win.maximized) {
       win.maximized = false;
       const g = win.savedGeom;
-      if (g) Object.assign(win.windowEl.style, g);
+      if (g) { win.wx = g.wx; win.wy = g.wy; win.ww = g.ww; win.wh = g.wh; }
       win.savedGeom = null;
+      positionWindow(id);
     } else {
       win.maximized = true;
-      win.savedGeom = { left: win.windowEl.style.left, top: win.windowEl.style.top,
-                        width: win.windowEl.style.width, height: win.windowEl.style.height };
-      // Fill current viewport in world-space coords
+      win.savedGeom = { wx: win.wx, wy: win.wy, ww: win.ww, wh: win.wh };
+      // Fill current viewport: CSS inside #world (which only translates)
+      // so left=-panX puts the window at screen x=0.
       const r = canvasRect();
       Object.assign(win.windowEl.style, {
-        left:   (-panX / zoom) + 'px',
-        top:    (-panY / zoom) + 'px',
-        width:  (r.width  / zoom) + 'px',
-        height: (r.height / zoom) + 'px'
+        left:   -panX + 'px',
+        top:    -panY + 'px',
+        width:  r.width  + 'px',
+        height: r.height + 'px'
       });
       bringToFront(id);
     }
@@ -533,6 +657,20 @@
     bringToFront(id);
     requestAnimationFrame(() => { win.fitAddon?.fit(); sendResize(id, win.terminal); });
     updateTaskbar();
+  }
+
+  function zoomToWindow(id) {
+    const win = windows.get(id);
+    if (!win || win.minimized) return;
+    const r   = canvasRect();
+    const pad = 40;
+    zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM,
+      Math.min((r.width - pad * 2) / win.ww, (r.height - pad * 2) / win.wh)
+    ));
+    panX = r.width  / 2 - (win.wx + win.ww / 2) * zoom;
+    panY = r.height / 2 - (win.wy + win.wh / 2) * zoom;
+    scheduleZoomSettle();
+    applyTransform();
   }
 
   function updateTaskbar() {
