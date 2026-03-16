@@ -322,6 +322,9 @@
                       minimized: false, maximized: false, savedGeom: null,
                       resizeObserver: null });
 
+    // Bring to front on any click, capture phase so xterm doesn't swallow it
+    el.addEventListener('mousedown', () => bringToFront(id), true);
+
     setupDrag(el, titlebar, id);
     setupResize(el, handles, id);
     setupTerminal(id, body);
@@ -452,6 +455,7 @@
     fitAddon.fit();
 
     term.onData((data) => vscode.postMessage({ type: 'input', id, data }));
+    term.focus();
 
     const ro = new ResizeObserver(() => requestAnimationFrame(() => {
       fitAddon.fit(); sendResize(id, term);

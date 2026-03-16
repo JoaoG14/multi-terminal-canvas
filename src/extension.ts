@@ -7,8 +7,10 @@ import * as path from 'path';
 let panelInstance: vscode.WebviewPanel | undefined;
 const terminals = new Map<string, pty.IPty>();
 let idCounter = 0;
+let bashInitFile: string | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
+  bashInitFile = createBashInitFile();
   context.subscriptions.push(
     vscode.commands.registerCommand('canvasTerminals.open', () => {
       if (panelInstance) {
@@ -108,8 +110,15 @@ function handleMessage(message: any, webview: vscode.Webview) {
           const m = data.match(osc7Re);
           if (m) {
             let cwd = decodeURIComponent(m[1]);
-            // Windows: /C:/path → C:\path
-            cwd = cwd.replace(/^\/([A-Za-z]):/, '$1:').replace(/\//g, '\\');
+            if (os.platform() === 'win32') {
+              if (/^\/[A-Za-z]:/.test(cwd)) {
+                // /C:/path → C:\path
+                cwd = cwd.slice(1).replace(/\//g, '\\');
+              } else if (/^\/[A-Za-z]\//.test(cwd)) {
+                // /c/path → C:\path  (MINGW/Git Bash format)
+                cwd = cwd[1].toUpperCase() + ':' + cwd.slice(2).replace(/\//g, '\\');
+              }
+            }
             webview.postMessage({ type: 'cwdChanged', id, cwd });
           }
         });
@@ -214,7 +223,33 @@ function getAvailableShells(): { name: string, path: string }[] {
 function getDefaultArgs(shellPath: string): string[] {
   const name = path.basename(shellPath).toLowerCase();
   if (name === 'powershell.exe' || name === 'pwsh.exe') return ['-NoLogo'];
+  if ((name === 'bash' || name === 'bash.exe') && bashInitFile) {
+    // Convert Windows path to Unix format for Git Bash
+    let rcfile = bashInitFile;
+    if (os.platform() === 'win32') {
+      rcfile = bashInitFile
+        .replace(/^([A-Za-z]):\\/, (_, d) => `/${d.toLowerCase()}/`)
+        .replace(/\\/g, '/');
+    }
+    return ['--rcfile', rcfile];
+  }
   return [];
+}
+
+function createBashInitFile(): string | undefined {
+  try {
+    const filePath = path.join(os.homedir(), '.canvas_terminal_init.sh');
+    const script = [
+      '[[ -f /etc/bash.bashrc ]] && source /etc/bash.bashrc',
+      '[[ -f ~/.bashrc ]] && source ~/.bashrc',
+      "__canvas_osc7() { printf '\\033]7;file://%s%s\\007' \"$HOSTNAME\" \"$PWD\"; }",
+      'PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND}; }__canvas_osc7"',
+    ].join('\n') + '\n';
+    fs.writeFileSync(filePath, script, 'utf8');
+    return filePath;
+  } catch (_) {
+    return undefined;
+  }
 }
 
 function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): string {
@@ -263,4 +298,7 @@ export function deactivate() {
     try { ptyProc.kill(); } catch (_) {}
   }
   terminals.clear();
+  if (bashInitFile) {
+    try { fs.unlinkSync(bashInitFile); } catch (_) {}
+  }
 }
