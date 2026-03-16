@@ -1,0 +1,35 @@
+{
+  "name": "canvas-terminals",
+  "displayName": "Canvas Terminals",
+  "description": "Multiple draggable, resizable terminal windows on a desktop canvas",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "canvasTerminals.open",
+        "title": "Canvas Terminals: Open"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "postinstall": "node ./node_modules/@electron/rebuild/lib/cli.js -w node-pty -v 34.3.2",
+    "rebuild": "node ./node_modules/@electron/rebuild/lib/cli.js -w node-pty -v 34.3.2"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.94.0",
+    "typescript": "^5.9.3"
+  }
+}
