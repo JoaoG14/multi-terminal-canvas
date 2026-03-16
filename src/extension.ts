@@ -7,7 +7,6 @@ const terminals = new Map<string, pty.IPty>();
 let idCounter = 0;
 
 export function activate(context: vscode.ExtensionContext) {
-  console.log('[CanvasTerminals] activate called');
   context.subscriptions.push(
     vscode.commands.registerCommand('canvasTerminals.open', () => {
       if (panelInstance) {
@@ -52,8 +51,6 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 function handleMessage(message: any, webview: vscode.Webview) {
-  console.log('[CanvasTerminals] received message:', message.type);
-  vscode.window.showInformationMessage(`[DBG] received: ${message.type}`);
   switch (message.type) {
     case 'createTerminal': {
       const id = String(++idCounter);
@@ -81,9 +78,7 @@ function handleMessage(message: any, webview: vscode.Webview) {
         }
       }
 
-      console.log('[CanvasTerminals] spawning shell:', shell, args);
       try {
-        vscode.window.showInformationMessage(`[DBG] spawning: ${shell}`);
         const ptyProcess = pty.spawn(shell, args, {
           name: 'xterm-256color',
           cols: 80,
@@ -92,8 +87,6 @@ function handleMessage(message: any, webview: vscode.Webview) {
           env: process.env as { [key: string]: string },
           useConpty: false
         });
-        vscode.window.showInformationMessage(`[DBG] spawned OK, sending terminalCreated`);
-
         ptyProcess.onData((data: string) => {
           webview.postMessage({ type: 'output', id, data });
         });
@@ -104,11 +97,9 @@ function handleMessage(message: any, webview: vscode.Webview) {
         });
 
         terminals.set(id, ptyProcess);
-        console.log('[CanvasTerminals] terminal spawned, sending terminalCreated id:', id);
         webview.postMessage({ type: 'terminalCreated', id, title });
       } catch (err: any) {
-        console.error('[CanvasTerminals] spawn error:', err);
-        vscode.window.showErrorMessage(`[DBG] spawn FAILED: ${err.message}`);
+        vscode.window.showErrorMessage(`Canvas Terminals: failed to spawn shell — ${err.message}`);
       }
       break;
     }

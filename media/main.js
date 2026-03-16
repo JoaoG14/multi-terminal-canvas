@@ -1,49 +1,186 @@
 (function() {
   'use strict';
 
-  console.log('[CanvasTerminals] main.js loaded, Terminal available:', typeof Terminal !== 'undefined');
-  console.log('[CanvasTerminals] FitAddon:', typeof FitAddon !== 'undefined', 'WebLinksAddon:', typeof WebLinksAddon !== 'undefined');
-
   const vscode = acquireVsCodeApi();
-  const canvas = document.getElementById('canvas');
-  const taskbar = document.getElementById('taskbar');
-  const btnNewTerminal = document.getElementById('btn-new-terminal');
-  const btnNewClaude = document.getElementById('btn-new-claude');
+  const canvasEl = document.getElementById('canvas');
+  const taskbar  = document.getElementById('taskbar');
+  const toolbar  = document.getElementById('toolbar');
 
-  // State
-  const windows = new Map(); // id -> { terminal, fitAddon, windowEl, titleEl, minimized, maximized, savedGeom, resizeObserver }
+  // ── World container (all windows live here) ───────────────────
+  const world = document.createElement('div');
+  world.id = 'world';
+  canvasEl.appendChild(world);
+
+  // ── Viewport state ────────────────────────────────────────────
+  let panX = 0, panY = 0, zoom = 1;
+  const MIN_ZOOM = 0.05, MAX_ZOOM = 5;
+
+  // Zoom indicator
+  const zoomLabel = document.createElement('span');
+  zoomLabel.id = 'zoom-indicator';
+  zoomLabel.textContent = '100%';
+  toolbar.appendChild(zoomLabel);
+
+  function applyTransform() {
+    world.style.transform = `translate(${panX}px,${panY}px) scale(${zoom})`;
+    zoomLabel.textContent = Math.round(zoom * 100) + '%';
+    // Scroll the grid background so it feels infinite
+    const g = 32 * zoom;
+    canvasEl.style.backgroundSize = `${g}px ${g}px`;
+    canvasEl.style.backgroundPosition = `${panX % g}px ${panY % g}px`;
+  }
+
+  function canvasRect() { return canvasEl.getBoundingClientRect(); }
+
+  // Zoom towards a screen-space pivot point
+  function zoomTo(newZoom, pivotSX, pivotSY) {
+    const r = canvasRect();
+    const px = pivotSX - r.left;
+    const py = pivotSY - r.top;
+    const wx = (px - panX) / zoom;
+    const wy = (py - panY) / zoom;
+    zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
+    panX = px - wx * zoom;
+    panY = py - wy * zoom;
+    applyTransform();
+  }
+
+  // ── Window state ──────────────────────────────────────────────
+  const windows = new Map();
   let zCounter = 100;
-  let pendingShell = null; // 'claude' or null, used when terminalCreated arrives
 
-  // Toolbar buttons
-  btnNewTerminal.addEventListener('click', () => {
-    console.log('[CanvasTerminals] + Terminal clicked');
-    pendingShell = null;
-    vscode.postMessage({ type: 'createTerminal', title: 'Terminal' });
-  });
+  // ── Pan state ─────────────────────────────────────────────────
+  let isPanning  = false;
+  let spaceDown  = false;
+  let panStart   = null; // { x, y, px, py }
 
-  btnNewClaude.addEventListener('click', () => {
-    pendingShell = 'claude';
-    vscode.postMessage({ type: 'createTerminal', shell: 'claude', title: 'Claude' });
-  });
-
-  // Ctrl+Shift+T opens new terminal
+  // ── Keyboard shortcuts ────────────────────────────────────────
   document.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && e.shiftKey && e.key === 'T') {
+    // Ignore when typing inside a focused xterm instance
+    const tag = document.activeElement?.tagName;
+
+    if (e.code === 'Space' && !e.ctrlKey && !e.metaKey && tag !== 'INPUT' && tag !== 'TEXTAREA') {
+      spaceDown = true;
+      canvasEl.style.cursor = 'grab';
       e.preventDefault();
-      pendingShell = null;
-      vscode.postMessage({ type: 'createTerminal', title: 'Terminal' });
+      return;
+    }
+
+    if (e.ctrlKey) {
+      switch (e.key) {
+        case '=': case '+':
+          zoomTo(zoom * 1.25, ...viewportCenter());
+          e.preventDefault(); break;
+        case '-':
+          zoomTo(zoom / 1.25, ...viewportCenter());
+          e.preventDefault(); break;
+        case '0':
+          // Reset to 100 % centred on viewport
+          zoomTo(1, ...viewportCenter());
+          e.preventDefault(); break;
+        case '9':
+          // Zoom to fit all windows
+          fitAll();
+          e.preventDefault(); break;
+      }
+      if (e.shiftKey && e.key === 'T') {
+        e.preventDefault();
+        vscode.postMessage({ type: 'createTerminal', title: 'Terminal' });
+      }
     }
   });
 
-  // Messages from extension host
+  document.addEventListener('keyup', (e) => {
+    if (e.code === 'Space') {
+      spaceDown = false;
+      if (!isPanning) canvasEl.style.cursor = '';
+    }
+  });
+
+  function viewportCenter() {
+    const r = canvasRect();
+    return [r.left + r.width / 2, r.top + r.height / 2];
+  }
+
+  // Zoom-to-fit all open windows
+  function fitAll() {
+    if (windows.size === 0) { panX = 0; panY = 0; zoom = 1; applyTransform(); return; }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [, win] of windows) {
+      const el = win.windowEl;
+      const x = parseFloat(el.style.left) || 0;
+      const y = parseFloat(el.style.top)  || 0;
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      minX = Math.min(minX, x);       minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + w);   maxY = Math.max(maxY, y + h);
+    }
+    const pad = 60;
+    const r   = canvasRect();
+    const scaleX = r.width  / (maxX - minX + pad * 2);
+    const scaleY = r.height / (maxY - minY + pad * 2);
+    zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(scaleX, scaleY)));
+    panX = -minX * zoom + pad * zoom + (r.width  - (maxX - minX) * zoom) / 2;
+    panY = -minY * zoom + pad * zoom + (r.height - (maxY - minY) * zoom) / 2;
+    applyTransform();
+  }
+
+  // ── Pan: space+drag / middle-mouse drag ───────────────────────
+  canvasEl.addEventListener('mousedown', (e) => {
+    if ((spaceDown && e.button === 0) || e.button === 1) {
+      isPanning  = true;
+      panStart   = { x: e.clientX, y: e.clientY, px: panX, py: panY };
+      canvasEl.style.cursor = 'grabbing';
+      e.preventDefault();
+    }
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isPanning) return;
+    panX = panStart.px + (e.clientX - panStart.x);
+    panY = panStart.py + (e.clientY - panStart.y);
+    applyTransform();
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isPanning) {
+      isPanning = false;
+      canvasEl.style.cursor = spaceDown ? 'grab' : '';
+    }
+  });
+
+  // ── Scroll: Ctrl+scroll → zoom, else → pan ───────────────────
+  canvasEl.addEventListener('wheel', (e) => {
+    const inTerminal = !!e.target.closest?.('.terminal-body');
+    if (e.ctrlKey) {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      zoomTo(zoom * factor, e.clientX, e.clientY);
+    } else if (!inTerminal) {
+      e.preventDefault();
+      if (e.shiftKey) {
+        panX -= e.deltaY;
+      } else {
+        panX -= e.deltaX;
+        panY -= e.deltaY;
+      }
+      applyTransform();
+    }
+  }, { passive: false });
+
+  // ── Toolbar buttons ───────────────────────────────────────────
+  document.getElementById('btn-new-terminal').addEventListener('click', () => {
+    vscode.postMessage({ type: 'createTerminal', title: 'Terminal' });
+  });
+  document.getElementById('btn-new-claude').addEventListener('click', () => {
+    vscode.postMessage({ type: 'createTerminal', shell: 'claude', title: 'Claude' });
+  });
+
+  // ── Messages from extension host ──────────────────────────────
   window.addEventListener('message', (event) => {
     const msg = event.data;
-    console.log('[CanvasTerminals] webview received message:', msg.type);
     switch (msg.type) {
-      case 'terminalCreated':
-        createWindow(msg.id, msg.title);
-        break;
+      case 'terminalCreated': createWindow(msg.id, msg.title); break;
       case 'output': {
         const win = windows.get(msg.id);
         if (win) win.terminal.write(msg.data);
@@ -51,29 +188,24 @@
       }
       case 'terminalExited': {
         const win = windows.get(msg.id);
-        if (win) {
-          win.terminal.write('\r\n\x1b[31m[Process exited with code ' + msg.exitCode + ']\x1b[0m\r\n');
-        }
+        if (win) win.terminal.write('\r\n\x1b[31m[exited ' + msg.exitCode + ']\x1b[0m\r\n');
         break;
       }
     }
   });
 
-  // ── Window creation ──────────────────────────────────────────
-
+  // ── Window creation ───────────────────────────────────────────
   function createWindow(id, title) {
-    const canvasRect = canvas.getBoundingClientRect();
-    const w = Math.min(700, Math.max(400, canvasRect.width * 0.5));
-    const h = Math.min(500, Math.max(250, canvasRect.height * 0.6));
-    const x = 40 + (windows.size % 5) * 30;
-    const y = 40 + (windows.size % 5) * 30;
+    const W = 700, H = 450;
+    const r = canvasRect();
+    // Centre in current viewport, cascade slightly per window
+    const off = (windows.size % 8) * 28;
+    const x = (r.width  / 2 - panX) / zoom - W / 2 + off;
+    const y = (r.height / 2 - panY) / zoom - H / 2 + off;
 
     const el = document.createElement('div');
     el.className = 'window';
-    el.style.left = x + 'px';
-    el.style.top = y + 'px';
-    el.style.width = w + 'px';
-    el.style.height = h + 'px';
+    Object.assign(el.style, { left: x+'px', top: y+'px', width: W+'px', height: H+'px' });
     el.dataset.id = id;
 
     // Titlebar
@@ -83,67 +215,45 @@
     const titleEl = document.createElement('span');
     titleEl.className = 'window-title';
     titleEl.textContent = title;
-
-    // Double-click to rename
     titleEl.addEventListener('dblclick', () => {
-      const newName = prompt('Rename terminal:', titleEl.textContent);
-      if (newName !== null && newName.trim()) {
-        titleEl.textContent = newName.trim();
-        updateTaskbar();
-      }
+      const n = prompt('Rename:', titleEl.textContent);
+      if (n?.trim()) { titleEl.textContent = n.trim(); updateTaskbar(); }
     });
 
     const controls = document.createElement('div');
     controls.className = 'window-controls';
-
-    const btnMin = document.createElement('button');
-    btnMin.className = 'wc-btn wc-minimize';
-    btnMin.title = 'Minimize';
-    btnMin.addEventListener('click', (e) => { e.stopPropagation(); minimizeWindow(id); });
-
-    const btnMax = document.createElement('button');
-    btnMax.className = 'wc-btn wc-maximize';
-    btnMax.title = 'Maximize';
-    btnMax.addEventListener('click', (e) => { e.stopPropagation(); maximizeWindow(id); });
-
-    const btnClose = document.createElement('button');
-    btnClose.className = 'wc-btn wc-close';
-    btnClose.title = 'Close';
-    btnClose.addEventListener('click', (e) => { e.stopPropagation(); closeWindow(id); });
-
-    controls.append(btnMin, btnMax, btnClose);
+    const mkBtn = (cls, label, fn) => {
+      const b = document.createElement('button');
+      b.className = 'wc-btn ' + cls; b.title = label;
+      b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
+      return b;
+    };
+    controls.append(
+      mkBtn('wc-minimize', 'Minimize', () => minimizeWindow(id)),
+      mkBtn('wc-maximize', 'Maximize', () => maximizeWindow(id)),
+      mkBtn('wc-close',    'Close',    () => closeWindow(id))
+    );
     titlebar.append(titleEl, controls);
 
-    // Terminal body
     const body = document.createElement('div');
     body.className = 'terminal-body';
 
     // Resize handles
-    const directions = ['n','s','e','w','nw','ne','sw','se'];
     const handles = [];
-    for (const dir of directions) {
+    for (const dir of ['n','s','e','w','nw','ne','sw','se']) {
       const h = document.createElement('div');
-      h.className = 'resize-handle resize-' + dir;
+      h.className = `resize-handle resize-${dir}`;
       h.dataset.dir = dir;
       handles.push(h);
       el.appendChild(h);
     }
 
     el.append(titlebar, body);
-    canvas.appendChild(el);
+    world.appendChild(el);   // lives inside the world transform
 
-    // Window state
-    const winState = {
-      terminal: null,
-      fitAddon: null,
-      windowEl: el,
-      titleEl,
-      minimized: false,
-      maximized: false,
-      savedGeom: null,
-      resizeObserver: null
-    };
-    windows.set(id, winState);
+    windows.set(id, { terminal: null, fitAddon: null, windowEl: el, titleEl,
+                      minimized: false, maximized: false, savedGeom: null,
+                      resizeObserver: null });
 
     setupDrag(el, titlebar, id);
     setupResize(el, handles, id);
@@ -151,165 +261,112 @@
     bringToFront(id);
   }
 
-  // ── Drag ─────────────────────────────────────────────────────
-
+  // ── Drag ──────────────────────────────────────────────────────
   function setupDrag(winEl, titlebar, id) {
-    let dragging = false;
-    let startX, startY, startLeft, startTop;
+    let active = false, startX, startY, startL, startT;
 
     titlebar.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
+      if (e.button !== 0 || spaceDown) return;  // space → pan instead
       const win = windows.get(id);
       if (!win || win.maximized) return;
       bringToFront(id);
-      dragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      startLeft = parseInt(winEl.style.left) || 0;
-      startTop = parseInt(winEl.style.top) || 0;
+      active = true;
+      startX = e.clientX; startY = e.clientY;
+      startL = parseFloat(winEl.style.left) || 0;
+      startT = parseFloat(winEl.style.top)  || 0;
       e.preventDefault();
     });
 
     document.addEventListener('mousemove', (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      winEl.style.left = (startLeft + dx) + 'px';
-      winEl.style.top = (startTop + dy) + 'px';
+      if (!active) return;
+      // divide screen delta by zoom to get world-space delta
+      winEl.style.left = (startL + (e.clientX - startX) / zoom) + 'px';
+      winEl.style.top  = (startT + (e.clientY - startY) / zoom) + 'px';
     });
 
-    document.addEventListener('mouseup', () => { dragging = false; });
+    document.addEventListener('mouseup', () => { active = false; });
   }
 
-  // ── Resize ───────────────────────────────────────────────────
-
+  // ── Resize ────────────────────────────────────────────────────
   function setupResize(winEl, handles, id) {
     for (const handle of handles) {
-      let resizing = false;
-      let dir, startX, startY, startLeft, startTop, startW, startH;
+      let active = false, dir, sx, sy, sl, st, sw, sh;
 
       handle.addEventListener('mousedown', (e) => {
-        if (e.button !== 0) return;
+        if (e.button !== 0 || spaceDown) return;
         const win = windows.get(id);
         if (!win || win.maximized) return;
         bringToFront(id);
-        resizing = true;
-        dir = handle.dataset.dir;
-        startX = e.clientX;
-        startY = e.clientY;
-        startLeft = parseInt(winEl.style.left) || 0;
-        startTop = parseInt(winEl.style.top) || 0;
-        startW = winEl.offsetWidth;
-        startH = winEl.offsetHeight;
-        e.preventDefault();
-        e.stopPropagation();
+        active = true; dir = handle.dataset.dir;
+        sx = e.clientX; sy = e.clientY;
+        sl = parseFloat(winEl.style.left) || 0;
+        st = parseFloat(winEl.style.top)  || 0;
+        sw = winEl.offsetWidth; sh = winEl.offsetHeight;
+        e.preventDefault(); e.stopPropagation();
       });
 
       document.addEventListener('mousemove', (e) => {
-        if (!resizing) return;
-        const dx = e.clientX - startX;
-        const dy = e.clientY - startY;
+        if (!active) return;
+        const dx = (e.clientX - sx) / zoom;
+        const dy = (e.clientY - sy) / zoom;
         const minW = 200, minH = 100;
-
-        let newLeft = startLeft, newTop = startTop, newW = startW, newH = startH;
-
-        if (dir.includes('e')) newW = Math.max(minW, startW + dx);
-        if (dir.includes('s')) newH = Math.max(minH, startH + dy);
-        if (dir.includes('w')) {
-          newW = Math.max(minW, startW - dx);
-          newLeft = startLeft + (startW - newW);
-        }
-        if (dir.includes('n')) {
-          newH = Math.max(minH, startH - dy);
-          newTop = startTop + (startH - newH);
-        }
-
-        winEl.style.left = newLeft + 'px';
-        winEl.style.top = newTop + 'px';
-        winEl.style.width = newW + 'px';
-        winEl.style.height = newH + 'px';
+        let nl = sl, nt = st, nw = sw, nh = sh;
+        if (dir.includes('e')) nw = Math.max(minW, sw + dx);
+        if (dir.includes('s')) nh = Math.max(minH, sh + dy);
+        if (dir.includes('w')) { nw = Math.max(minW, sw - dx); nl = sl + (sw - nw); }
+        if (dir.includes('n')) { nh = Math.max(minH, sh - dy); nt = st + (sh - nh); }
+        Object.assign(winEl.style, { left: nl+'px', top: nt+'px', width: nw+'px', height: nh+'px' });
       });
 
       document.addEventListener('mouseup', () => {
-        if (resizing) {
-          resizing = false;
+        if (active) {
+          active = false;
           const win = windows.get(id);
-          if (win && win.fitAddon) {
-            requestAnimationFrame(() => {
-              win.fitAddon.fit();
-              sendResize(id, win.terminal);
-            });
-          }
+          if (win?.fitAddon) requestAnimationFrame(() => {
+            win.fitAddon.fit(); sendResize(id, win.terminal);
+          });
         }
       });
     }
   }
 
-  // ── Terminal setup ────────────────────────────────────────────
-
+  // ── Terminal ──────────────────────────────────────────────────
   function setupTerminal(id, container) {
     const term = new Terminal({
-      theme: {
-        background: '#141414',
-        foreground: '#cccccc',
-        cursor: '#4a9eff',
-        selectionBackground: 'rgba(74,158,255,0.3)'
-      },
-      fontFamily: "'Cascadia Code', 'Consolas', monospace",
-      fontSize: 13,
-      lineHeight: 1.2,
-      cursorBlink: true,
-      allowProposedApi: true
+      theme: { background: '#141414', foreground: '#cccccc',
+               cursor: '#4a9eff', selectionBackground: 'rgba(74,158,255,0.3)' },
+      fontFamily: "'Cascadia Code','Consolas',monospace",
+      fontSize: 13, lineHeight: 1.2, cursorBlink: true, allowProposedApi: true
     });
-
-    const fitAddon = new FitAddon.FitAddon();
-    const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+    const fitAddon  = new FitAddon.FitAddon();
+    const linkAddon = new WebLinksAddon.WebLinksAddon();
     term.loadAddon(fitAddon);
-    term.loadAddon(webLinksAddon);
+    term.loadAddon(linkAddon);
     term.open(container);
     fitAddon.fit();
 
-    term.onData((data) => {
-      vscode.postMessage({ type: 'input', id, data });
-    });
+    term.onData((data) => vscode.postMessage({ type: 'input', id, data }));
 
-    const resizeObserver = new ResizeObserver(() => {
-      requestAnimationFrame(() => {
-        fitAddon.fit();
-        sendResize(id, term);
-      });
-    });
-    resizeObserver.observe(container);
+    const ro = new ResizeObserver(() => requestAnimationFrame(() => {
+      fitAddon.fit(); sendResize(id, term);
+    }));
+    ro.observe(container);
 
     const win = windows.get(id);
-    if (win) {
-      win.terminal = term;
-      win.fitAddon = fitAddon;
-      win.resizeObserver = resizeObserver;
-    }
+    if (win) { win.terminal = term; win.fitAddon = fitAddon; win.resizeObserver = ro; }
   }
 
   function sendResize(id, term) {
     if (!term) return;
-    vscode.postMessage({
-      type: 'resize',
-      id,
-      cols: term.cols,
-      rows: term.rows
-    });
+    vscode.postMessage({ type: 'resize', id, cols: term.cols, rows: term.rows });
   }
 
-  // ── Window operations ─────────────────────────────────────────
-
+  // ── Window ops ────────────────────────────────────────────────
   function bringToFront(id) {
-    for (const [wid, win] of windows) {
+    for (const [wid, win] of windows)
       win.windowEl.classList.toggle('window-active', wid === id);
-    }
     const win = windows.get(id);
-    if (win) {
-      zCounter++;
-      win.windowEl.style.zIndex = zCounter;
-    }
+    if (win) win.windowEl.style.zIndex = ++zCounter;
   }
 
   function minimizeWindow(id) {
@@ -323,51 +380,36 @@
   function maximizeWindow(id) {
     const win = windows.get(id);
     if (!win) return;
-
     if (win.maximized) {
-      // Restore
       win.maximized = false;
       const g = win.savedGeom;
-      if (g) {
-        win.windowEl.style.left = g.left;
-        win.windowEl.style.top = g.top;
-        win.windowEl.style.width = g.width;
-        win.windowEl.style.height = g.height;
-      }
+      if (g) Object.assign(win.windowEl.style, g);
       win.savedGeom = null;
-      requestAnimationFrame(() => {
-        win.fitAddon && win.fitAddon.fit();
-        sendResize(id, win.terminal);
-      });
     } else {
-      // Maximize
       win.maximized = true;
-      win.savedGeom = {
-        left: win.windowEl.style.left,
-        top: win.windowEl.style.top,
-        width: win.windowEl.style.width,
-        height: win.windowEl.style.height
-      };
-      win.windowEl.style.left = '0px';
-      win.windowEl.style.top = '0px';
-      win.windowEl.style.width = canvas.clientWidth + 'px';
-      win.windowEl.style.height = canvas.clientHeight + 'px';
-      bringToFront(id);
-      requestAnimationFrame(() => {
-        win.fitAddon && win.fitAddon.fit();
-        sendResize(id, win.terminal);
+      win.savedGeom = { left: win.windowEl.style.left, top: win.windowEl.style.top,
+                        width: win.windowEl.style.width, height: win.windowEl.style.height };
+      // Fill current viewport in world-space coords
+      const r = canvasRect();
+      Object.assign(win.windowEl.style, {
+        left:   (-panX / zoom) + 'px',
+        top:    (-panY / zoom) + 'px',
+        width:  (r.width  / zoom) + 'px',
+        height: (r.height / zoom) + 'px'
       });
+      bringToFront(id);
     }
+    requestAnimationFrame(() => {
+      win.fitAddon?.fit(); sendResize(id, win.terminal);
+    });
   }
 
   function closeWindow(id) {
     const win = windows.get(id);
     if (!win) return;
-
     vscode.postMessage({ type: 'closeTerminal', id });
-
-    if (win.resizeObserver) win.resizeObserver.disconnect();
-    if (win.terminal) win.terminal.dispose();
+    win.resizeObserver?.disconnect();
+    win.terminal?.dispose();
     win.windowEl.remove();
     windows.delete(id);
     updateTaskbar();
@@ -379,14 +421,9 @@
     win.minimized = false;
     win.windowEl.style.display = 'flex';
     bringToFront(id);
-    requestAnimationFrame(() => {
-      win.fitAddon && win.fitAddon.fit();
-      sendResize(id, win.terminal);
-    });
+    requestAnimationFrame(() => { win.fitAddon?.fit(); sendResize(id, win.terminal); });
     updateTaskbar();
   }
-
-  // ── Taskbar ───────────────────────────────────────────────────
 
   function updateTaskbar() {
     taskbar.innerHTML = '';
@@ -394,11 +431,12 @@
       if (!win.minimized) continue;
       const btn = document.createElement('button');
       btn.className = 'taskbar-btn';
-      btn.textContent = win.titleEl.textContent;
-      btn.title = win.titleEl.textContent;
+      btn.textContent = btn.title = win.titleEl.textContent;
       btn.addEventListener('click', () => restoreWindow(id));
       taskbar.appendChild(btn);
     }
   }
+
+  applyTransform();
 
 })();
