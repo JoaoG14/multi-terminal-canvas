@@ -481,16 +481,8 @@
       const win = windows.get(id);
       if (!win) return;
       // Screen delta / zoom = world delta (world has no CSS scale, so screen px = CSS px)
-      const newWX = startWX + (e.clientX - startX) / zoom;
-      const newWY = startWY + (e.clientY - startY) / zoom;
-
-      if (!collides(id, newWX, newWY, win.ww, win.wh)) {
-        curWX = newWX; curWY = newWY;
-      } else if (!collides(id, newWX, curWY, win.ww, win.wh)) {
-        curWX = newWX;
-      } else if (!collides(id, curWX, newWY, win.ww, win.wh)) {
-        curWY = newWY;
-      }
+      curWX = startWX + (e.clientX - startX) / zoom;
+      curWY = startWY + (e.clientY - startY) / zoom;
       win.wx = curWX; win.wy = curWY;
       winEl.style.left = curWX * zoom + 'px';
       winEl.style.top  = curWY * zoom + 'px';
@@ -528,13 +520,11 @@
         if (dir.includes('s')) nwh = Math.max(minH, startWH + dy);
         if (dir.includes('w')) { nww = Math.max(minW, startWW - dx); nwx = startWX + (startWW - nww); }
         if (dir.includes('n')) { nwh = Math.max(minH, startWH - dy); nwy = startWY + (startWH - nwh); }
-        if (!collides(id, nwx, nwy, nww, nwh)) {
-          win.wx = nwx; win.wy = nwy; win.ww = nww; win.wh = nwh;
-          Object.assign(winEl.style, {
-            left:   win.wx * zoom + 'px', top:    win.wy * zoom + 'px',
-            width:  win.ww * zoom + 'px', height: win.wh * zoom + 'px'
-          });
-        }
+        win.wx = nwx; win.wy = nwy; win.ww = nww; win.wh = nwh;
+        Object.assign(winEl.style, {
+          left:   win.wx * zoom + 'px', top:    win.wy * zoom + 'px',
+          width:  win.ww * zoom + 'px', height: win.wh * zoom + 'px'
+        });
       });
 
       document.addEventListener('mouseup', () => {
