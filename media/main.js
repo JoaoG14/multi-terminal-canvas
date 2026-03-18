@@ -68,14 +68,15 @@
     zoomInProgress = true;
     clearTimeout(zoomSettleTimer);
     zoomSettleTimer = setTimeout(() => {
-      zoomInProgress = false;
       const newFontSize = Math.max(6, Math.round(BASE_FONT_SIZE * zoom));
       for (const [id, win] of windows) {
         if (!win.terminal || !win.fitAddon) continue;
         win.terminal.options.fontSize = newFontSize;
         win.fitAddon.fit();
+        win.terminal.refresh(0, win.terminal.rows - 1);
         sendResize(id, win.terminal);
       }
+      zoomInProgress = false;
     }, 150);
   }
 
@@ -481,8 +482,16 @@
       const win = windows.get(id);
       if (!win) return;
       // Screen delta / zoom = world delta (world has no CSS scale, so screen px = CSS px)
-      curWX = startWX + (e.clientX - startX) / zoom;
-      curWY = startWY + (e.clientY - startY) / zoom;
+      const newWX = startWX + (e.clientX - startX) / zoom;
+      const newWY = startWY + (e.clientY - startY) / zoom;
+
+      if (!collides(id, newWX, newWY, win.ww, win.wh)) {
+        curWX = newWX; curWY = newWY;
+      } else if (!collides(id, newWX, curWY, win.ww, win.wh)) {
+        curWX = newWX;
+      } else if (!collides(id, curWX, newWY, win.ww, win.wh)) {
+        curWY = newWY;
+      }
       win.wx = curWX; win.wy = curWY;
       winEl.style.left = curWX * zoom + 'px';
       winEl.style.top  = curWY * zoom + 'px';
@@ -520,11 +529,13 @@
         if (dir.includes('s')) nwh = Math.max(minH, startWH + dy);
         if (dir.includes('w')) { nww = Math.max(minW, startWW - dx); nwx = startWX + (startWW - nww); }
         if (dir.includes('n')) { nwh = Math.max(minH, startWH - dy); nwy = startWY + (startWH - nwh); }
-        win.wx = nwx; win.wy = nwy; win.ww = nww; win.wh = nwh;
-        Object.assign(winEl.style, {
-          left:   win.wx * zoom + 'px', top:    win.wy * zoom + 'px',
-          width:  win.ww * zoom + 'px', height: win.wh * zoom + 'px'
-        });
+        if (!collides(id, nwx, nwy, nww, nwh)) {
+          win.wx = nwx; win.wy = nwy; win.ww = nww; win.wh = nwh;
+          Object.assign(winEl.style, {
+            left:   win.wx * zoom + 'px', top:    win.wy * zoom + 'px',
+            width:  win.ww * zoom + 'px', height: win.wh * zoom + 'px'
+          });
+        }
       });
 
       document.addEventListener('mouseup', () => {
